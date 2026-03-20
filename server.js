@@ -1,3 +1,4 @@
+
 const express = require("express");
 const cors = require("cors");
 const { Pool } = require("pg");
@@ -9,16 +10,15 @@ app.use(express.json());
 
 const pool = new Pool({
   user: "postgres",
-  host: "host.docker.internal",
-  database: "companydb",
-  password: "Madhu@01",
+  host: "db",
+  database: "user_db",
+  password: "Madhu",
   port: 5432,
 });
 
-
-// ===============================
-// GET USERS WITH PAGINATION
-// ===============================
+/* =========================
+   GET USERS (FIXED)
+========================= */
 app.get("/users", async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -26,9 +26,20 @@ app.get("/users", async (req, res) => {
     const offset = (page - 1) * limit;
 
     const users = await pool.query(
-      "SELECT * FROM users ORDER BY uuid LIMIT $1 OFFSET $2",
+      `SELECT 
+         id::text AS id,
+         name,
+         email,
+         age,
+         gender,
+         company
+       FROM users
+       ORDER BY id
+       LIMIT $1 OFFSET $2`,
       [limit, offset]
     );
+
+    console.log("DB USERS:", users.rows);
 
     const total = await pool.query("SELECT COUNT(*) FROM users");
 
@@ -39,75 +50,106 @@ app.get("/users", async (req, res) => {
     });
 
   } catch (err) {
-    console.error(err);
+    console.error("GET ERROR:", err.message);
     res.status(500).json({ error: "Server error" });
   }
 });
 
-
-// ===============================
-// ADD USER
-// ===============================
+/* =========================
+   CREATE USER
+========================= */
 app.post("/users", async (req, res) => {
   try {
-    const { name, email, age, gender, company, isactive } = req.body;
+    const { name, email, age, gender, company } = req.body;
+
+    if (!name || !email || !age || !gender) {
+      return res.status(400).json({ error: "All fields required" });
+    }
 
     const newUser = await pool.query(
-      `INSERT INTO users (name, email, age, gender, company, isactive)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING *`,
-      [name, email, age, gender, company, isactive]
+      `INSERT INTO users (id, name, email, age, gender, company)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5)
+       RETURNING id::text AS id, name, email, age, gender, company`,
+      [name, email, age, gender, company]
     );
 
     res.json(newUser.rows[0]);
+
   } catch (err) {
-    console.error(err);
+    if (err.code === "23505") {
+      return res.status(400).json({ error: "Email already exists" });
+    }
+
+    console.error("POST ERROR:", err.message);
     res.status(500).json({ error: "Server error" });
   }
 });
 
-
-// ===============================
-// UPDATE USER (using uuid)
-// ===============================
-app.put("/users/:uuid", async (req, res) => {
+/* =========================
+   UPDATE USER
+========================= */
+app.put("/users/:id", async (req, res) => {
   try {
-    const uuid = req.params.uuid;
-    const { name, email, age, gender, company, isactive } = req.body;
+    const id = req.params.id;
+    const { name, email, age, gender, company } = req.body;
 
-    const updatedUser = await pool.query(
+    if (!id || id === "undefined") {
+      return res.status(400).json({ error: "Invalid ID" });
+    }
+
+    const result = await pool.query(
       `UPDATE users
-       SET name=$1, email=$2, age=$3, gender=$4, company=$5, isactive=$6
-       WHERE uuid=$7
-       RETURNING *`,
-      [name, email, age, gender, company, isactive, uuid]
+       SET name=$1, email=$2, age=$3, gender=$4, company=$5
+       WHERE id=$6
+       RETURNING id::text AS id, name, email, age, gender, company`,
+      [name, email, age, gender, company, id]
     );
 
-    res.json(updatedUser.rows[0]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    res.json(result.rows[0]);
+
   } catch (err) {
-    console.error(err);
+    console.error("UPDATE ERROR:", err.message);
     res.status(500).json({ error: "Server error" });
   }
 });
 
-
-// ===============================
-// DELETE USER (using uuid)
-// ===============================
-app.delete("/users/:uuid", async (req, res) => {
+/* =========================
+   DELETE USER (FIXED)
+========================= */
+app.delete("/users/:id", async (req, res) => {
   try {
-    const uuid = req.params.uuid;
+    const id = req.params.id;
 
-    await pool.query("DELETE FROM users WHERE uuid=$1", [uuid]);
+    console.log("DELETE ID:", id);
+
+    if (!id || id === "undefined") {
+      return res.status(400).json({ error: "Invalid ID" });
+    }
+
+    const result = await pool.query(
+      "DELETE FROM users WHERE id=$1 RETURNING *",
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "User not found" });
+    }
 
     res.json({ message: "User deleted successfully" });
+
   } catch (err) {
-    console.error(err);
+    console.error("DELETE ERROR:", err.message);
     res.status(500).json({ error: "Server error" });
   }
 });
 
-
+/* =========================
+   SERVER
+========================= */
 app.listen(5000, () => {
   console.log("Server running on port 5000");
 });
