@@ -9,10 +9,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-/* =========================
-   REDIS SETUP
-========================= 
-new!!!*/
+/* REDIS SETUP  new!!!*/
 const redisClient = redis.createClient({
   url: "redis://redis:6379"
 });
@@ -45,9 +42,7 @@ const clearUsersCache = async () => {
   }
 };
 
-/* =========================
-   DB SETUP
-========================= */
+/* DB SETUP */
 const pool = new Pool({
   user: "postgres",
   host: "db",
@@ -56,9 +51,7 @@ const pool = new Pool({
   port: 5432,
 });
 
-/* =========================
-   GET USERS (WITH CACHE)
-========================= */
+/* GET USERS (WITH CACHE) */
 app.get("/users", async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -120,9 +113,7 @@ app.get("/users", async (req, res) => {
   }
 });
 
-/* =========================
-   CREATE USER
-========================= */
+/* CREATE USER */
 app.post("/users", async (req, res) => {
   try {
     const { name, email, age, gender, company } = req.body;
@@ -152,9 +143,7 @@ app.post("/users", async (req, res) => {
   }
 });
 
-/* =========================
-   UPDATE USER
-========================= */
+/* UPDATE USER*/
 app.put("/users/:id", async (req, res) => {
   try {
     const id = req.params.id;
@@ -186,9 +175,7 @@ app.put("/users/:id", async (req, res) => {
   }
 });
 
-/* =========================
-   DELETE USER
-========================= */
+/* DELETE USER*/
 app.delete("/users/:id", async (req, res) => {
   try {
     const id = req.params.id;
@@ -216,9 +203,7 @@ app.delete("/users/:id", async (req, res) => {
   }
 });
 
-/* =========================
-   SERVER START
-========================= 
+/*SERVER START
 const startServer = async () => {
   try {
     await redisClient.connect();
