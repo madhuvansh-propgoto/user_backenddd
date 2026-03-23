@@ -2,12 +2,52 @@
 const express = require("express");
 const cors = require("cors");
 const { Pool } = require("pg");
+const redis = require("redis");
 
 const app = express();
 
 app.use(cors());
 app.use(express.json());
 
+/* =========================
+   REDIS SETUP
+========================= 
+new!!!*/
+const redisClient = redis.createClient({
+  url: "redis://redis:6379"
+});
+
+redisClient.on("connect", () => {
+  console.log("Redis connecting...");
+});
+
+redisClient.on("ready", () => {
+  console.log("Redis ready");
+});
+
+redisClient.on("error", (err) => {
+  console.error("Redis error:", err);
+});
+
+redisClient.on("end", () => {
+  console.log("Redis connection closed");
+});
+
+const clearUsersCache = async () => {
+  try {
+    const keys = await redisClient.keys("users:*");
+    if (keys.length > 0) {
+      await redisClient.del(keys);
+      console.log("Cache cleared");
+    }
+  } catch (err) {
+    console.error("Redis clear error:", err);
+  }
+};
+
+/* =========================
+   DB SETUP
+========================= */
 const pool = new Pool({
   user: "postgres",
   host: "db",
@@ -17,7 +57,7 @@ const pool = new Pool({
 });
 
 /* =========================
-   GET USERS (FIXED)
+   GET USERS (WITH CACHE)
 ========================= */
 app.get("/users", async (req, res) => {
   try {
@@ -25,6 +65,25 @@ app.get("/users", async (req, res) => {
     const limit = parseInt(req.query.limit) || 5;
     const offset = (page - 1) * limit;
 
+    const cacheKey = `users:${page}:${limit}`;
+
+    // CACHE CHECK
+    // const cachedData = await redisClient.get(cacheKey);
+    //new!!!
+    let cachedData = null;
+
+    if (redisClient.isOpen) {
+      cachedData = await redisClient.get(cacheKey);
+    }
+
+    if (cachedData) {
+      console.log("CACHE HIT");
+      return res.json(JSON.parse(cachedData));
+    }
+
+    console.log("CACHE MISS");
+
+    // DB QUERY
     const users = await pool.query(
       `SELECT 
          id::text AS id,
@@ -39,15 +98,21 @@ app.get("/users", async (req, res) => {
       [limit, offset]
     );
 
-    console.log("DB USERS:", users.rows);
-
     const total = await pool.query("SELECT COUNT(*) FROM users");
 
-    res.json({
+    const response = {
       users: users.rows,
       totalPages: Math.ceil(total.rows[0].count / limit),
       currentPage: page,
-    });
+    };
+
+    // STORE IN REDIS (TTL 60s)
+    // await redisClient.setEx(cacheKey, 60, JSON.stringify(response));
+    //new!!!
+    if (redisClient.isOpen) {
+      await redisClient.setEx(cacheKey, 60, JSON.stringify(response));
+    }
+    res.json(response);
 
   } catch (err) {
     console.error("GET ERROR:", err.message);
@@ -72,6 +137,8 @@ app.post("/users", async (req, res) => {
        RETURNING id::text AS id, name, email, age, gender, company`,
       [name, email, age, gender, company]
     );
+
+    await clearUsersCache();
 
     res.json(newUser.rows[0]);
 
@@ -109,6 +176,8 @@ app.put("/users/:id", async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
 
+    await clearUsersCache();
+
     res.json(result.rows[0]);
 
   } catch (err) {
@@ -118,13 +187,11 @@ app.put("/users/:id", async (req, res) => {
 });
 
 /* =========================
-   DELETE USER (FIXED)
+   DELETE USER
 ========================= */
 app.delete("/users/:id", async (req, res) => {
   try {
     const id = req.params.id;
-
-    console.log("DELETE ID:", id);
 
     if (!id || id === "undefined") {
       return res.status(400).json({ error: "Invalid ID" });
@@ -139,6 +206,8 @@ app.delete("/users/:id", async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
 
+    await clearUsersCache();
+
     res.json({ message: "User deleted successfully" });
 
   } catch (err) {
@@ -148,8 +217,51 @@ app.delete("/users/:id", async (req, res) => {
 });
 
 /* =========================
-   SERVER
-========================= */
-app.listen(5000, () => {
-  console.log("Server running on port 5000");
-});
+   SERVER START
+========================= 
+const startServer = async () => {
+  try {
+    await redisClient.connect();
+    console.log("Redis connected");
+
+    app.listen(5000, () => {
+      console.log("Server running on port 5000");
+    });
+
+  } catch (err) {
+    console.error("Startup Error:", err);
+  }
+};*/
+
+const waitForDB = async () => {
+  while (true) {
+    try {
+      await pool.query("SELECT 1");
+      console.log("DB connected");
+      break;
+    } catch (err) {
+      console.log("Waiting for DB...");
+      await new Promise(res => setTimeout(res, 2000));
+    }
+  }
+};
+
+const startServer = async () => {
+  try {
+    await redisClient.connect();
+
+    const pong = await redisClient.ping();
+    console.log("Redis status:", pong);
+
+    await waitForDB();
+
+    app.listen(5000, () => {
+      console.log("Server running on port 5000");
+    });
+
+  } catch (err) {
+    console.error("Startup Error:", err);
+  }
+};
+
+startServer();
