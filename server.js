@@ -3,6 +3,7 @@ const express = require("express");
 const cors = require("cors");
 const { Pool } = require("pg");
 const redis = require("redis");
+const { producer, consumer } = require("./kafka");
 
 const app = express();
 
@@ -50,6 +51,64 @@ const pool = new Pool({
   password: "Madhu",
   port: 5432,
 });
+
+const connectKafka = async () => {
+  while (true) {
+    try {
+      console.log("Connecting to Kafka...");
+
+      await producer.connect();
+      console.log("Producer connected");
+
+      await consumer.connect();
+      console.log("Consumer connected");
+
+      await consumer.subscribe({
+        topic: "user-topic",
+        fromBeginning: true,
+      });
+
+      await consumer.run({
+  eachMessage: async ({ topic, partition, message }) => {
+    try {
+      console.log("RAW MESSAGE RECEIVED:", message.value.toString());
+
+      const event = JSON.parse(message.value.toString());
+
+      console.log("Parsed Event:", event);
+
+      switch (event.action) {
+        case "CREATE_USER":
+          console.log("User Created:", event.data);
+          break;
+
+        case "UPDATE_USER":
+          console.log("User Updated:", event.data);
+          break;
+
+        case "DELETE_USER":
+          console.log("User Deleted, ID:", event.id);
+          break;
+
+        default:
+          console.log("Unknown event:", event);
+      }
+
+    } catch (err) {
+      console.error("Consumer error:", err.message);
+    }
+  },
+});
+
+      console.log("Kafka connected successfully");
+      break;
+
+    } catch (err) {
+      console.log("Kafka connection failed:", err.message);
+      await new Promise(res => setTimeout(res, 5000));
+    }
+  }
+};
 
 /* GET USERS (WITH CACHE) */
 app.get("/users", async (req, res) => {
@@ -129,6 +188,20 @@ app.post("/users", async (req, res) => {
       [name, email, age, gender, company]
     );
 
+    console.log("Sending Kafka event...");
+    // ✅ Kafka event
+    await producer.send({
+      topic: "user-topic",
+      messages: [
+        {
+          value: JSON.stringify({
+            action: "CREATE_USER",
+            data: newUser.rows[0],
+          }),
+        },
+      ],
+    });
+
     await clearUsersCache();
 
     res.json(newUser.rows[0]);
@@ -165,6 +238,19 @@ app.put("/users/:id", async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
 
+    // ✅ Kafka event
+    await producer.send({
+      topic: "user-topic",
+      messages: [
+        {
+          value: JSON.stringify({
+            action: "UPDATE_USER",
+            data: result.rows[0],
+          }),
+        },
+      ],
+    });
+
     await clearUsersCache();
 
     res.json(result.rows[0]);
@@ -192,6 +278,19 @@ app.delete("/users/:id", async (req, res) => {
     if (result.rows.length === 0) {
       return res.status(404).json({ error: "User not found" });
     }
+
+    // ✅ Kafka event
+    await producer.send({
+      topic: "user-topic",
+      messages: [
+        {
+          value: JSON.stringify({
+            action: "DELETE_USER",
+            id: id,
+          }),
+        },
+      ],
+    });
 
     await clearUsersCache();
 
@@ -239,6 +338,8 @@ const startServer = async () => {
     console.log("Redis status:", pong);
 
     await waitForDB();
+
+    await connectKafka();
 
     app.listen(5000, () => {
       console.log("Server running on port 5000");
